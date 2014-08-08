@@ -56,25 +56,27 @@ class GP(object):
     def __init__(self):
         super(GP, self).__init__()
         self.usingDefaultMean = True  # was using default mean function now?
-        self.meanfunc = None
-        self.covfunc = None
-        self.likfunc = None
-        self.inffunc = None
+        self.meanfunc  = None
+        self.covfunc   = None
+        self.likfunc   = None
+        self.inffunc   = None
         self.optimizer = None
-        self.nlZ = None           # negative log marginal likelihood
-        self.dnlZ = None          # column vector of partial derivatives of the negative
-                                  # log marginal likelihood w.r.t. each hyperparameter
+        self.nlZ       = None     # negative log marginal likelihood
+        self.dnlZ      = None     # column vector of partial derivatives of the negative
+        						  # log marginal likelihood w.r.t. each hyperparameter
+        self.dscale    = None     # ScalePrior something or other
         self.posterior = None     # struct representation of the (approximate) posterior
-        self.x = None             # n by D matrix of training inputs
-        self.y = None             # column vector of length n of training targets
-        self.xs = None            # n by D matrix of test inputs
-        self.ys = None            # column vector of length nn of true test targets (optional)
-        self.ym = None            # column vector (of length ns) of predictive output means
-        self.ys2 = None           # column vector (of length ns) of predictive output variances
-        self.fm = None            # column vector (of length ns) of predictive latent means
-        self.fs2 = None           # column vector (of length ns) of predictive latent variances
-        self.lp = None            # column vector (of length ns) of log predictive probabilities
+        self.x         = None     # n by D matrix of training inputs
+        self.y         = None     # column vector of length n of training targets
+        self.xs        = None     # n by D matrix of test inputs
+        self.ys        = None     # column vector of length nn of true test targets (optional)
+        self.ym        = None     # column vector (of length ns) of predictive output means
+        self.ys2       = None     # column vector (of length ns) of predictive output variances
+        self.fm        = None     # column vector (of length ns) of predictive latent means
+        self.fs2       = None     # column vector (of length ns) of predictive latent variances
+        self.lp        = None     # column vector (of length ns) of log predictive probabilities
 
+        self.ScalePrior = None	  # Output scale uncertainty (will be a Gamma prior parameter list of len 2)
 
     def setData(self, x, y):
         '''
@@ -89,6 +91,10 @@ class GP(object):
         if self.usingDefaultMean:
             c = np.mean(y)
             self.meanfunc = mean.Const(c)    # adapt default prior mean wrt. training labels
+
+    def setScalePrior(self, scalePrior):
+        assert(isinstance(scalePrior, list) and len(scalePrior) == 2)
+        self.ScalePrior = scalePrior
 
     def plotData_1d(self, axisvals=None):
         '''
@@ -130,8 +136,7 @@ class GP(object):
                 self.usingDefaultMean = False
 
     def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None):
-        '''
-        This method is used to sepecify optimization configuration. By default, gp uses a single run "minimize".
+        '''This method is used to sepecify optimization configuration. By default, gp uses a single run "minimize".
 
         :param method: Optimization methods. Possible values are:
 
@@ -142,6 +147,11 @@ class GP(object):
                         "BFGS"       -> quasi-Newton method of Broyden, Fletcher, Goldfarb, and Shanno (BFGS)
 
                         "SCG"        -> scaled conjugent gradient (faster than CG)
+
+                        "COBYLA"     -> Constrained Optimization by Linear Approximation method of Powell
+
+                        "LBFGSB"       -> A Limited Memory Algorithm for Bound Constrained Optimization
+
         :param num_restarts: Set if you want to run mulitiple times of optimization with different initial guess.
                              It specifys the maximum number of runs/restarts/trials.
         :param min_threshold: Set if you want to run mulitiple times of optimization with different initial guess.
@@ -212,14 +222,20 @@ class GP(object):
             if any( uy[ind] != -1):
                 raise Exception('You attempt classification using labels different from {+1,-1}')
         if not der:
-            post, nlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, 2)
+            post, nlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, self.ScalePrior, 2)
             self.nlZ = nlZ
             self.posterior = deepcopy(post)
             return nlZ, post
         else:
-            post, nlZ, dnlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, 3)
-            self.nlZ = nlZ
-            self.dnlZ = deepcopy(dnlZ)
+            if self.ScalePrior:
+                post, nlZ, dnlZ, dscale = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, self.ScalePrior, 3)
+            else:
+                post, nlZ, dnlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, self.ScalePrior, 3)
+                dscale = None
+            self.nlZ       = nlZ
+            self.dnlZ      = deepcopy(dnlZ)
+            self.dscale    = dscale
+            print 'dscale = ',dscale
             self.posterior = deepcopy(post)
             return nlZ, dnlZ, post
 
@@ -424,6 +440,12 @@ class GPR(GP):
             self.optimizer = opt.CG(self,conf)
         elif method == "BFGS":
             self.optimizer = opt.BFGS(self,conf)
+        elif method == "LBFGSB":
+            self.optimizer = opt.LBFGSB(self, conf)
+        elif method == "COBYLA":
+            self.optimizer = opt.COBYLA(self, conf)
+        else:
+            raise Error('Optimization method is not set correctly in setOptimizer')
 
     def plot(self,axisvals=None):
         '''Plot 1d GP regression.'''
@@ -500,6 +522,10 @@ class GPC(GP):
             self.optimizer = opt.CG(self,conf)
         elif method == "BFGS":
             self.optimizer = opt.BFGS(self,conf)
+        elif method == "LBFGSB":
+            self.optimizer = opt.LBFGSB(self, conf)
+        elif method == "COBYLA":
+            self.optimizer = opt.COBYLA(self, conf)
 
     def plot(self,x1,x2,t1,t2,axisvals=None):
         '''Plot 2d gp classification.'''
@@ -763,6 +789,10 @@ class GPR_FITC(GP_FITC):
             self.optimizer = opt.CG(self,conf)
         elif method == "BFGS":
             self.optimizer = opt.BFGS(self,conf)
+        elif method == "LBFGSB":
+            self.optimizer = opt.LBFGSB(self, conf)
+        elif method == "COBYLA":
+            self.optimizer = opt.COBYLA(self, conf)
 
     def plot(self,axisvals=None):
         '''Plot 1d GP FITC regression.'''
@@ -841,6 +871,10 @@ class GPC_FITC(GP_FITC):
             self.optimizer = opt.CG(self,conf)
         elif method == "BFGS":
             self.optimizer = opt.BFGS(self,conf)
+        elif method == "LBFGSB":
+            self.optimizer = opt.LBFGSB(self, conf)
+        elif method == "COBYLA":
+            self.optimizer = opt.COBYLA(self, conf)
 
     def plot(self,x1,x2,t1,t2,axisvals=None):
         '''Plot 2d GP FITC classification.'''

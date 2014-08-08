@@ -43,6 +43,7 @@
 
 
 import numpy as np
+import scipy.special as scspec
 import lik, cov
 from copy import copy,deepcopy
 from tools import solve_chol,brentmin,cholupdate
@@ -124,7 +125,7 @@ class Inference(object):
         '''
         pass
 
-    def _epComputeParams(self, K, y, ttau, tnu, likfunc, m, inffunc):
+    def _epComputeParams(self, K, y, ttau, tnu, likfunc, m, inffunc, scaleprior = None):
         n     = len(y)                                                # number of training cases
         ssi   = np.sqrt(ttau)                                         # compute Sigma and mu
         L     = np.linalg.cholesky(np.eye(n)+np.dot(ssi,ssi.T)*K).T   # L'*L=B=eye(n)+sW*K*sW
@@ -134,7 +135,7 @@ class Inference(object):
         Dsigma = np.reshape(np.diag(Sigma),(np.diag(Sigma).shape[0],1))
         tau_n = 1/Dsigma - ttau               # compute the log marginal likelihood
         nu_n  = mu/Dsigma-tnu + m*tau_n       # vectors of cavity parameters
-        lZ    = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc)
+        lZ    = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, scaleprior)
         nlZ   = np.log(np.diag(L)).sum() - lZ.sum() - np.dot(tnu.T,np.dot(Sigma,tnu))/2  \
                 - np.dot((nu_n-m*tau_n).T,((ttau/tau_n*(nu_n-m*tau_n)-2*tnu) / (ttau+tau_n)))/2 \
                 + (tnu**2/(tau_n+ttau)).sum()/2.- np.log(1.+ttau/tau_n).sum()/2.
@@ -173,18 +174,18 @@ class Inference(object):
         else:
             return ldA
 
-    def _Psi_line(self,s,dalpha,alpha,K,m,likfunc,y,inffunc):
+    def _Psi_line(self,s,dalpha,alpha,K,m,likfunc,y,inffunc,scaleprior=None):
         '''Criterion Psi at alpha + s*dalpha for line search
         [Psi,alpha,f,dlp,W] = _Psi_line(s,dalpha,alpha,hyp,K,m,lik,y,inf)
         '''
         alpha = alpha + s*dalpha
         f = np.dot(K,alpha) + m
-        [lp,dlp,d2lp] = likfunc.evaluate(y,f,None,inffunc,None,3)
+        [lp,dlp,d2lp] = likfunc.evaluate(y,f,None,inffunc,None,scaleprior,3)
         W = -d2lp
         Psi = np.dot(alpha.T,(f-m))/2. - lp.sum()
         return Psi[0],alpha,f,dlp,W
 
-    def _epfitcZ(self,d,P,R,nn,gg,ttau,tnu,d0,R0,P0,y,likfunc,m,inffunc):
+    def _epfitcZ(self,d,P,R,nn,gg,ttau,tnu,d0,R0,P0,y,likfunc,m,inffunc,scaleprior=None):
         '''
         Compute the marginal likelihood approximation
         effort is O(n*nu^2) provided that nu<n
@@ -194,7 +195,7 @@ class Inference(object):
         mu = nn + np.dot(P.T,gg)                # post moments O(n*nu^2)
         tau_n = 1./diag_sigma-ttau              # compute the log marginal likelihood
         nu_n  = mu/diag_sigma - tnu + m*tau_n   # vectors of cavity parameters
-        lZ = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, None, 1)
+        lZ = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, None, scaleprior, 1)
         nu = gg.shape[0]
         U = np.dot(R0,P0).T*np.tile(1/np.sqrt(d0+1/ttau),(1,nu))
         L = np.linalg.cholesky(np.eye(nu)+np.dot(U.T,U)).T
@@ -260,13 +261,13 @@ class Inference(object):
         Kal = np.dot(V.T,np.dot(V,al)) + d0*al
         return Kal
 
-    def _Psi_lineFITC(self,s,dalpha,alpha,V,d0,m,likfunc,y,inffunc):
+    def _Psi_lineFITC(self,s,dalpha,alpha,V,d0,m,likfunc,y,inffunc,scaleprior=None):
         '''
         Criterion Psi at alpha + s*dalpha for line search
         '''
         alpha = alpha + s*dalpha
         f = self._mvmK(alpha,V,d0) + m
-        vargout = likfunc.evaluate(y,f,None,inffunc,None,3)
+        vargout = likfunc.evaluate(y,f,None,inffunc,None,scaleprior,3)
         lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
         W = -d2lp
         Psi = np.dot(alpha.T,(f-m))/2. - lp.sum()
@@ -298,7 +299,7 @@ class Exact(Inference):
     '''
     def __init__(self):
         self.name = "Exact inference"
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
+    def evaluate(self, meanfunc, covfunc, likfunc, x, y, scaleprior = None, nargout=1):
         if not isinstance(likfunc, lik.Gauss):
             raise Exception ('Exact inference only possible with Gaussian likelihood')
         n, D = x.shape
@@ -313,11 +314,25 @@ class Exact(Inference):
         post.sW    = np.ones((n,1))/np.sqrt(sn2)               # sqrt of noise precision vector
         post.L     = L                                         # L = chol(eye(n)+sW*sW'.*K)
 
+        if scaleprior:
+            alpha0, beta0 = scaleprior
+            df = 2*alpha0
+            Z = -scspec.gammaln(0.5*(df+n)) + scspec.gammaln(0.5*df) + 0.5*n*np.log(2*np.pi*beta0)
+
         if nargout>1:                                          # do we want the marginal likelihood?
-            nlZ = np.dot((y-m).T,alpha)/2. + np.log(np.diag(L)).sum() + n*np.log(2*np.pi*sn2)/2. # -log marg lik
+            if scaleprior:
+                dscale = np.log(1.0+np.dot((y-m).T,alpha)/(2.0*beta0))
+                nlZ = 0.5*(df + n)*dscale + np.log(np.diag(L)).sum() + Z
+            else:
+                nlZ = np.dot((y-m).T,alpha)/2. + np.log(np.diag(L)).sum() + n*np.log(2*np.pi*sn2)/2. # -log marg lik
             if nargout>2:                                      # do we want derivatives?
                 dnlZ = dnlZStruct(meanfunc, covfunc, likfunc)  # allocate space for derivatives
-                Q = solve_chol(L,np.eye(n))/sn2 - np.dot(alpha,alpha.T) # precompute for convenience
+                if scaleprior:
+                    corrFactor = (df+n)/(2*beta0 + np.dot((y-m).T,alpha))
+                    Q = solve_chol(L,np.eye(n))/sn2 - corrFactor*np.dot(alpha,alpha.T) # precompute for convenience
+                    dscale += scspec.digamma(alpha0) - scspec.digamma(alpha0 + 0.5*n)
+                else:
+	                Q = solve_chol(L,np.eye(n))/sn2 - np.dot(alpha,alpha.T) # precompute for convenience
                 dnlZ.lik = [sn2*np.trace(Q)]
                 if covfunc.hyp:
                     for ii in range(len(covfunc.hyp)):
@@ -326,7 +341,10 @@ class Exact(Inference):
                     for ii in range(len(meanfunc.hyp)):
                         dnlZ.mean[ii] = np.dot(-meanfunc.getDerMatrix(x, ii).T,alpha)
                         dnlZ.mean[ii] = dnlZ.mean[ii][0,0]
-                return post, nlZ[0,0], dnlZ
+                if scaleprior:
+					return post, nlZ[0,0], dnlZ, dscale
+                else:
+	                return post, nlZ[0,0], dnlZ
             return post, nlZ[0,0]
         return post
 
@@ -342,7 +360,7 @@ class FITC_Exact(Inference):
     def __init__(self):
         self.name = 'FICT exact inference'
 
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
+    def evaluate(self, meanfunc, covfunc, likfunc, x, y, scaleprior = None, nargout=1):
         if not isinstance(likfunc, lik.Gauss):                  # NOTE: no explicit call to likGauss
             raise Exception ('Exact inference only possible with Gaussian likelihood')
         if not isinstance(covfunc, cov.FITCOfKernel):
@@ -407,7 +425,7 @@ class Laplace(Inference):
     def __init__(self):
         self.last_alpha = None
 
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
+    def evaluate(self, meanfunc, covfunc, likfunc, x, y, scaleprior = None, nargout=1):
         tol = 1e-6                           # tolerance for when to stop the Newton iterations
         smax = 2; Nline = 20; thr = 1e-4     # line search parameters
         maxit = 20                           # max number of Newton steps in f
@@ -419,23 +437,23 @@ class Laplace(Inference):
         if self.last_alpha == None:          # find a good starting point for alpha and f
             alpha = np.zeros((n,1))
             f = np.dot(K,alpha) + m          # start at mean if sizes not match
-            vargout = likfunc.evaluate(y, f, None, inffunc, None, 3)
+            vargout = likfunc.evaluate(y, f, None, inffunc, None, scaleprior, 3)
             lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
             W= -d2lp
             Psi_new = -lp.sum()
         else:
             alpha = self.last_alpha
             f = np.dot(K,alpha) + m                       # try last one
-            vargout = likfunc.evaluate(y, f, None, inffunc, None, 3)
+            vargout = likfunc.evaluate(y, f, None, inffunc, None, scaleprior, 3)
             lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
             W= -d2lp
             Psi_new = np.dot(alpha.T,(f-m))/2. - lp.sum() # objective for last alpha
-            vargout = - likfunc.evaluate(y, m, None, inffunc, None, 1)
+            vargout = - likfunc.evaluate(y, m, None, inffunc, None, scaleprior, 1)
             Psi_def =  vargout[0]                         # objective for default init f==m
             if Psi_def < Psi_new:                         # if default is better, we use it
                 alpha = np.zeros((n,1))
                 f = np.dot(K,alpha) + m
-                vargout = likfunc.evaluate(y, f, None, inffunc, None, 3)
+                vargout = likfunc.evaluate(y, f, None, inffunc, None, scaleprior, 3)
                 lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
                 W=-d2lp; Psi_new = -lp.sum()
         isWneg = np.any(W<0)       # flag indicating whether we found negative values of W
@@ -449,7 +467,7 @@ class Laplace(Inference):
             sW = np.sqrt(W); L = np.linalg.cholesky(np.eye(n) + np.dot(sW,sW.T)*K).T
             b = W*(f-m) + dlp;
             dalpha = b - sW*solve_chol(L,sW*np.dot(K,b)) - alpha
-            vargout = brentmin(0,smax,Nline,thr,self._Psi_line,4,dalpha,alpha,K,m,likfunc,y,inffunc)
+            vargout = brentmin(0,smax,Nline,thr,self._Psi_line,4,dalpha,alpha,K,m,likfunc,y,inffunc,scaleprior)
             s = vargout[0]
             Psi_new = vargout[1]
             Nfun = vargout[2]
@@ -459,7 +477,7 @@ class Laplace(Inference):
             W = vargout[6]
             isWneg = np.any(W<0)
         self.last_alpha = alpha                 # remember for next call
-        vargout = likfunc.evaluate(y,f,None,inffunc,None,4)
+        vargout = likfunc.evaluate(y,f,None,inffunc,None,scaleprior,4)
         lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]; d3lp = vargout[3]
         W = -d2lp; isWneg = np.any(W<0)
         post = postStruct()
@@ -491,7 +509,7 @@ class Laplace(Inference):
                 dnlZ.cov[ii] -= np.dot(dfhat.T,b-np.dot(K,np.dot(Z,b)))      # implicit part
                 dnlZ.cov[ii] = dnlZ.cov[ii][0,0]
             for ii in range(len(likfunc.hyp)):                               # likelihood hypers
-                [lp_dhyp,dlp_dhyp,d2lp_dhyp] = likfunc.evaluate(y,f,None,inffunc,ii,3)
+                [lp_dhyp,dlp_dhyp,d2lp_dhyp] = likfunc.evaluate(y,f,None,inffunc,ii,scaleprior,3)
                 dnlZ.lik[ii] = -np.dot(g.T,d2lp_dhyp) - lp_dhyp.sum()        # explicit part
                 b = np.dot(K,dlp_dhyp)                                       # b-K*(Z*b) = inv(eye(n)+K*diag(W))*b
                 dnlZ.lik[ii] -= np.dot(dfhat.T,b-np.dot(K,np.dot(Z,b)))      # implicit part
@@ -521,7 +539,7 @@ class FITC_Laplace(Inference):
     def __init__(self):
         self.last_alpha = None
 
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
+    def evaluate(self, meanfunc, covfunc, likfunc, x, y, scaleprior = None, nargout=1):
         if not isinstance(covfunc, cov.FITCOfKernel):
             raise Exception('Only covFITC supported.')
         tol = 1e-6                             # tolerance for when to stop the Newton iterations
@@ -547,22 +565,22 @@ class FITC_Laplace(Inference):
         if self.last_alpha == None:         # find a good starting point for alpha and f
             alpha = np.zeros((n,1))
             f = self._mvmK(alpha,V,d0) + m   # start at mean if sizes not match
-            vargout = likfunc.evaluate(y, f, None, inffunc, None, 3)
+            vargout = likfunc.evaluate(y, f, None, inffunc, None, scaleprior, 3)
             lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
             W=-d2lp; Psi_new = -lp.sum()
         else:
             alpha = self.last_alpha
             f = self._mvmK(alpha,V,d0) + m                           # try last one
-            vargout = likfunc.evaluate(y, f, None, inffunc, None, 3)
+            vargout = likfunc.evaluate(y, f, None, inffunc, None, scaleprior, 3)
             lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
             W=-d2lp
             Psi_new = np.dot(alpha.T,(f-m))/2. - lp.sum()           # objective for last alpha
-            vargout = - likfunc.evaluate(y, m, None, inffunc, None, 1)
+            vargout = - likfunc.evaluate(y, m, None, inffunc, None, scaleprior, 1)
             Psi_def =  vargout[0]                                   # objective for default init f==m
             if Psi_def < Psi_new:                                   # if default is better, we use it
                 alpha = np.zeros((n,1))
                 f = self._mvmK(alpha,V,d0) + m
-                vargout = likfunc.evaluate(y, f, None, inffunc, None, 3)
+                vargout = likfunc.evaluate(y, f, None, inffunc, None, scaleprior, 3)
                 lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]
                 W=-d2lp; Psi_new = -lp.sum()
 
@@ -578,13 +596,13 @@ class FITC_Laplace(Inference):
             b = W*(f-m) + dlp; dd = 1/(1+W*d0)
             RV = np.dot( chol_inv( np.eye(nu) + np.dot(V*np.tile((W*dd).T,(nu,1)),V.T)),V )
             dalpha = dd*b - (W*dd)*np.dot(RV.T,np.dot(RV,(dd*b))) - alpha # Newt dir + line search
-            vargout = brentmin(0,smax,Nline,thr,self._Psi_lineFITC,4,dalpha,alpha,V,d0,m,likfunc,y,inffunc)
+            vargout = brentmin(0,smax,Nline,thr,self._Psi_lineFITC,4,dalpha,alpha,V,d0,m,likfunc,y,inffunc,scaleprior)
             s = vargout[0]; Psi_new = vargout[1]; Nfun = vargout[2]; alpha = vargout[3]
             f = vargout[4]; dlp = vargout[5]; W = vargout[6]
             isWneg = np.any(W<0)
 
         self.last_alpha = alpha                                     # remember for next call
-        vargout = likfunc.evaluate(y,f,None,inffunc,None,4)
+        vargout = likfunc.evaluate(y,f,None,inffunc,None,scaleprior,4)
         lp = vargout[0]; dlp = vargout[1]; d2lp = vargout[2]; d3lp = vargout[3]
 
         W=-d2lp; isWneg = np.any(W<0)
@@ -625,7 +643,7 @@ class FITC_Laplace(Inference):
                 dnlZ.cov[ii] = dnlZ.cov[ii][0,0]
 
             for ii in range(len(likfunc.hyp)):                      # likelihood hypers
-                vargout = likfunc.evaluate(y,f,None,inffunc,ii,3)
+                vargout = likfunc.evaluate(y,f,None,inffunc,ii,scaleprior,3)
                 lp_dhyp = vargout[0]; dlp_dhyp = vargout[1]; d2lp_dhyp = vargout[2]
                 dnlZ.lik[ii] = -np.dot(g.T,d2lp_dhyp) - lp_dhyp.sum() # explicit part
                 b = self._mvmK(dlp_dhyp,V,d0)                          # implicit part
@@ -666,13 +684,13 @@ class EP(Inference):
         self.name = 'Expectation Propagation'
         self.last_ttau = None
         self.last_tnu = None
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
+    def evaluate(self, meanfunc, covfunc, likfunc, x, y, scaleprior = None, nargout=1):
         tol = 1e-4; max_sweep = 10; min_sweep = 2 # tolerance to stop EP iterations
         n = x.shape[0]
         inffunc = self
         K = covfunc.getCovMatrix(x=x, mode='train') # evaluate the covariance matrix
         m = meanfunc.getMean(x)                   # evaluate the mean vector
-        nlZ0 = -likfunc.evaluate(y, m, np.reshape(np.diag(K),(np.diag(K).shape[0],1)), inffunc).sum()
+        nlZ0 = -likfunc.evaluate(y, m, np.reshape(np.diag(K),(np.diag(K).shape[0],1)), inffunc, scaleprior).sum()
         if self.last_ttau == None:                # find starting point for tilde parameters
             ttau  = np.zeros((n,1))               # initialize to zero if we have no better guess
             tnu   = np.zeros((n,1))
@@ -682,7 +700,7 @@ class EP(Inference):
         else:
             ttau = self.last_ttau                 # try the tilde values from previous call
             tnu  = self.last_tnu
-            Sigma, mu, nlZ, L = self._epComputeParams(K, y, ttau, tnu, likfunc, m, inffunc)
+            Sigma, mu, nlZ, L = self._epComputeParams(K, y, ttau, tnu, likfunc, m, inffunc, scaleprior)
             if nlZ > nlZ0:                        # if zero is better ..
                 ttau = np.zeros((n,1))            # .. then initialize with zero instead
                 tnu  = np.zeros((n,1))
@@ -697,7 +715,7 @@ class EP(Inference):
                 tau_ni = 1/Sigma[ii,ii] - ttau[ii]#  first find the cavity distribution ..
                 nu_ni  = mu[ii]/Sigma[ii,ii] + m[ii]*tau_ni - tnu[ii]    # .. params tau_ni and nu_ni
                 # compute the desired derivatives of the indivdual log partition function
-                lZ,dlZ,d2lZ = likfunc.evaluate(y[ii], nu_ni/tau_ni, 1/tau_ni, inffunc, None, 3)
+                lZ,dlZ,d2lZ = likfunc.evaluate(y[ii], nu_ni/tau_ni, 1/tau_ni, inffunc, None, scaleprior, 3)
                 ttau_old = copy(ttau[ii])         # then find the new tilde parameters, keep copy of old
                 ttau[ii] = -d2lZ  /(1.+d2lZ/tau_ni)
                 ttau[ii] = max(ttau[ii],0)        # enforce positivity i.e. lower bound ttau by zero
@@ -707,7 +725,7 @@ class EP(Inference):
                 Sigma = Sigma - ds2/(1.+ds2*si[ii])*np.dot(si,si.T)   # takes 70# of total time
                 mu = np.dot(Sigma,tnu)                                # .. and recompute mu
             # recompute since repeated rank-one updates can destroy numerical precision
-            Sigma, mu, nlZ, L = self._epComputeParams(K, y, ttau, tnu, likfunc, m, inffunc)
+            Sigma, mu, nlZ, L = self._epComputeParams(K, y, ttau, tnu, likfunc, m, inffunc, scaleprior)
         if sweep == max_sweep:
             pass
             # print '[warning] maximum number of sweeps reached in function infEP'
@@ -732,9 +750,9 @@ class EP(Inference):
                 dK = covfunc.getDerMatrix(x=x, mode='train', der=jj)
                 dnlZ.cov[jj] = -(F*dK).sum()/2.
             for ii in range(len(likfunc.hyp)):
-                dlik = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, ii)
+                dlik = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, scaleprior, ii)
                 dnlZ.lik[ii] = -dlik.sum()
-            junk,dlZ = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, None, 2) # mean hyps
+            junk,dlZ = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, None, scaleprior, 2) # mean hyps
             for ii in range(len(meanfunc.hyp)):
                 dm = meanfunc.getDerMatrix(x, ii)
                 dnlZ.mean[ii] = -np.dot(dlZ.T,dm)
@@ -763,7 +781,7 @@ class FITC_EP(Inference):
         self.last_ttau = None
         self.last_tnu = None
 
-    def evaluate(self, meanfunc, covfunc, likfunc, x, y, nargout=1):
+    def evaluate(self, meanfunc, covfunc, likfunc, x, y, scaleprior = None, nargout=1):
         if not isinstance(covfunc, cov.FITCOfKernel):
             raise Exception('Only covFITC supported.')  # check cov
         tol = 1e-4; max_sweep = 10; min_sweep = 2       # tolerance to stop EP iterations
@@ -792,7 +810,7 @@ class FITC_EP(Inference):
         # for a vector of cavity parameters.
 
         # marginal likelihood for ttau = tnu = zeros(n,1); equals n*log(2) for likCum*
-        nlZ0 = -1.* likfunc.evaluate(y, m, np.reshape(diagK,(diagK.shape[0],1)), inffunc).sum()
+        nlZ0 = -1.* likfunc.evaluate(y, m, np.reshape(diagK,(diagK.shape[0],1)), inffunc, scaleprior).sum()
         if self.last_ttau == None:                      # find starting point for tilde parameters
             ttau  = np.zeros((n,1))                     # initialize to zero if we have no better guess
             tnu   = np.zeros((n,1))
@@ -802,7 +820,7 @@ class FITC_EP(Inference):
             ttau = self.last_ttau                       # try the tilde values from previous call
             tnu  = self.last_tnu
             [d,P,R,nn,gg] = self._epfitcRefresh(d0,Ku,R0,V,ttau,tnu) # compute initial repres.
-            nlZ = self._epfitcZ(d,P,R,nn,gg,ttau,tnu,d0,R0,Ku,y,likfunc,m,inffunc)[0]
+            nlZ = self._epfitcZ(d,P,R,nn,gg,ttau,tnu,d0,R0,Ku,y,likfunc,m,inffunc,scaleprior)[0]
             if nlZ > nlZ0:                              # if zero is better ..
                 ttau = np.zeros((n,1))                  # .. then initialize with zero instead
                 tnu  = np.zeros((n,1))
@@ -821,7 +839,7 @@ class FITC_EP(Inference):
                 tau_ni = 1/sigma_i - ttau[ii]                   #  first find the cavity distribution ..
                 nu_ni  = mu_i/sigma_i + m[ii]*tau_ni - tnu[ii]  # .. params tau_ni and nu_ni
                 # compute the desired derivatives of the indivdual log partition function
-                vargout = likfunc.evaluate(y[ii], nu_ni/tau_ni, 1/tau_ni, inffunc, None, 3)
+                vargout = likfunc.evaluate(y[ii], nu_ni/tau_ni, 1/tau_ni, inffunc, None, scaleprior, 3)
                 lZ = vargout[0]; dlZ = vargout[1]; d2lZ = vargout[2]
                 ttau_i = -d2lZ  /(1.+d2lZ/tau_ni)
                 ttau_i = max(ttau_i,0)                  # enforce positivity i.e. lower bound ttau by zero
@@ -830,7 +848,7 @@ class FITC_EP(Inference):
 
             # recompute since repeated rank-one updates can destroy numerical precision
             [d,P,R,nn,gg] = self._epfitcRefresh(d0,Ku,R0,V,ttau,tnu)
-            [nlZ,nu_n,tau_n] = self._epfitcZ(d,P,R,nn,gg,ttau,tnu,d0,R0,Ku,y,likfunc,m,inffunc)
+            [nlZ,nu_n,tau_n] = self._epfitcZ(d,P,R,nn,gg,ttau,tnu,d0,R0,Ku,y,likfunc,m,inffunc,scaleprior)
         if sweep == max_sweep:
             pass
             # print '[warning] maximum number of sweeps reached in function infEP'
@@ -861,7 +879,7 @@ class FITC_EP(Inference):
                 dnlZ.cov[ii] = (z - np.dot(alpha.T,(alpha*v)) - np.dot(np.dot(alpha.T,dA),np.dot(R0tV,alpha)))/2.
                 dnlZ.cov[ii] = dnlZ.cov[ii][0,0]
             for ii in range(len(likfunc.hyp)):                # likelihood hypers
-                dlik = likfunc.evaluate(y, nu_n/tau_n+m, 1/tau_n, inffunc, ii, 1)
+                dlik = likfunc.evaluate(y, nu_n/tau_n+m, 1/tau_n, inffunc, ii, scaleprior, 1)
                 dnlZ.lik[ii] = -dlik.sum()
                 if ii == len(likfunc.hyp)-1:
                     # since snu2 is a fixed fraction of sn2, there is a covariance-like term
@@ -871,7 +889,7 @@ class FITC_EP(Inference):
                     z = z + np.dot(post.alpha.T,post.alpha) - np.dot(alpha.T,(v*alpha))
                     dnlZ.lik[ii] += snu2*z
                     dnlZ.lik[ii] = dnlZ.lik[ii][0,0]
-            [junk,dlZ] = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, None, 2) # mean hyps
+            [junk,dlZ] = likfunc.evaluate(y, nu_n/tau_n, 1/tau_n, inffunc, None, scaleprior, 2) # mean hyps
             for ii in range(len(meanfunc.hyp)):
                 dm = meanfunc.getDerMatrix(x, ii)
                 dnlZ.mean[ii] = -np.dot(dlZ.T,dm)

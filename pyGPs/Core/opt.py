@@ -22,6 +22,9 @@ import numpy as np
 import gp
 from scipy.optimize import fmin_bfgs as bfgs
 from scipy.optimize import fmin_cg as cg
+from scipy.optimize import fmin_cobyla as cobyla
+from scipy.optimize import fmin_l_bfgs_b as lbfgsb
+import pyGPs
 from pyGPs.Optimization import minimize, scg
 from copy import deepcopy
 
@@ -80,7 +83,7 @@ class Optimizer(object):
         self.model.covfunc.hyp   = hypInList[Lm:(Lm+Lc)]
         self.model.likfunc.hyp   = hypInList[(Lm+Lc):]
 
-       
+
 
 class CG(Optimizer):
     '''Conjugent gradient'''
@@ -108,7 +111,7 @@ class CG(Optimizer):
                 print "Gradient and/or function calls not changing."
         except:
             self.errorCounter += 1
-            if not self.searchConfig:         
+            if not self.searchConfig:
                 raise Exception("Can not use conjugate gradient. Try other hyparameters")
         self.trailsCounter += 1
 
@@ -168,7 +171,7 @@ class BFGS(Optimizer):
                 print "Gradient and/or function calls not changing."
         except:
             self.errorCounter += 1
-            if not self.searchConfig:         
+            if not self.searchConfig:
                 raise Exception("Can not use BFGS. Try other hyparameters")
         self.trailsCounter += 1
 
@@ -203,6 +206,79 @@ class BFGS(Optimizer):
 
 
 
+class LBFGSB(Optimizer):
+
+    def __init__(self, model, searchConfig=None):
+        super(LBFGSB, self).__init__()
+        self.model = model
+        self.searchConfig = searchConfig
+        self.trailsCounter = 0
+        self.errorCounter = 0
+
+    def findMin(self, x, y):
+        meanfunc = self.model.meanfunc
+        covfunc = self.model.covfunc
+        likfunc = self.model.likfunc
+        inffunc = self.model.inffunc
+        hypInArray = self._convert_to_array()
+
+        if isinstance(covfunc, pyGPs.cov.SM):
+            Lm = len(meanfunc.hyp)
+            Lc = len(covfunc.hyp)
+
+        try:
+            opt = lbfgsb(self._nlzAnddnlz, hypInArray, None, maxiter=100)
+            optimalHyp = deepcopy(opt[0])
+            funcValue = opt[1]
+            warnFlag = opt[2]['warnflag']
+            if warnFlag == 1:
+                print "Maximum number of iterations exceeded."
+            elif warnFlag == 2:
+                print "Gradient and/or function calls not changing."
+        except:
+            self.errorCounter += 1
+            if not self.searchConfig:
+                raise Exception("Can not use L-BFGS-B. Try other hyparameters")
+        self.trailsCounter += 1
+
+        if self.searchConfig:
+            searchRange = self.searchConfig.meanRange + \
+                self.searchConfig.covRange + self.searchConfig.likRange
+            if not (self.searchConfig.num_restarts or self.searchConfig.min_threshold):
+                raise Exception('Specify at least one of the stop conditions')
+            while True:
+                self.trailsCounter += 1                 # increase counter
+                # TODO Replace with better initialization
+                for i in xrange(hypInArray.shape[0]):   # random init of hyp
+                    hypInArray[i] = np.random.uniform(low=searchRange[i][0], high=searchRange[i][1])
+                if isinstance(self.model.covfunc, pyGPs.cov.SM):
+                    hyps = pyGPs.cov.initSMhypers(self.model.covfunc.para[0], x, y)
+                    hypInArray[Lm:Lm + Lc] = hyps[:]
+
+                # value this time is better than optimal min value
+                thisopt = lbfgsb(self._nlzAnddnlz, hypInArray, None, maxiter=100)
+                try:
+                	thisopt = lbfgsb(self._nlzAnddnlz, hypInArray, None, maxiter=100)
+                	if thisopt[1] < funcValue:
+                		funcValue = thisopt[1]
+                		optimalHyp = thisopt[0]
+                except:
+                    self.errorCounter += 1
+                if self.searchConfig.num_restarts and self.errorCounter > self.searchConfig.num_restarts / 2:
+                    print "[L-BFGS-B] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
+                    raise Exception("Over half of the trails failed for L-BFGS-B")
+                # if exceed num_restarts
+                if self.searchConfig.num_restarts and self.trailsCounter > self.searchConfig.num_restarts - 1:
+                    print "[L-BFGS-B] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
+                    return optimalHyp, funcValue
+                # reach provided mininal
+                if self.searchConfig.min_threshold and funcValue <= self.searchConfig.min_threshold:
+                    print "[L-BFGS-B] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
+                    return optimalHyp, funcValue
+
+        return optimalHyp, funcValue
+
+
 class Minimize(Optimizer):
     '''minimize by Carl Rasmussen (python implementation of "minimize" in GPML)'''
     def __init__(self, model, searchConfig = None):
@@ -219,13 +295,14 @@ class Minimize(Optimizer):
         inffunc = self.model.inffunc
         hypInArray = self._convert_to_array()
 
-        try: 
+        opt = minimize.run(self._nlzAnddnlz, hypInArray, length=-40)
+        try:
             opt = minimize.run(self._nlzAnddnlz, hypInArray, length=-40)
             optimalHyp = deepcopy(opt[0])
-            funcValue  = opt[1][-1]  
+            funcValue  = opt[1][-1]
         except:
             self.errorCounter += 1
-            if not self.searchConfig:         
+            if not self.searchConfig:
                 raise Exception("Can not use minimize. Try other hyparameters")
         self.trailsCounter += 1
 
@@ -253,9 +330,76 @@ class Minimize(Optimizer):
                     return optimalHyp, funcValue
                 if self.searchConfig.min_threshold and funcValue <= self.searchConfig.min_threshold:           # reach provided mininal
                     print "[Minimize] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
-                    return optimalHyp, funcValue                   
+                    return optimalHyp, funcValue
         return optimalHyp, funcValue
 
+
+
+class COBYLA(Optimizer):
+
+    def __init__(self, model, searchConfig=None):
+        super(COBYLA, self).__init__()
+        self.model = model
+        self.searchConfig = searchConfig
+        self.trailsCounter = 0
+        self.errorCounter = 0
+
+    def findMin(self, x, y):
+        meanfunc = self.model.meanfunc
+        covfunc = self.model.covfunc
+        likfunc = self.model.likfunc
+        inffunc = self.model.inffunc
+        hypInArray = self._convert_to_array()
+
+        if isinstance(covfunc, pyGPs.cov.SM):
+            Lm = len(meanfunc.hyp)
+            Lc = len(covfunc.hyp)
+
+        try:
+            optimalHyp = cobyla(self._nlml, hypInArray, [], iprint=0, maxfun=1000)
+            funcValue = self._nlml(optimalHyp)
+        except:
+            self.errorCounter += 1
+            if not self.searchConfig:
+                raise Exception("Can not use COBYLA. Try other hyparameters")
+        self.trailsCounter += 1
+
+        if self.searchConfig:
+            searchRange = self.searchConfig.meanRange + \
+                self.searchConfig.covRange + self.searchConfig.likRange
+            if not (self.searchConfig.num_restarts or self.searchConfig.min_threshold):
+                raise Exception('Specify at least one of the stop conditions')
+            while True:
+                self.trailsCounter += 1                 # increase counter
+                # TODO Replace with better initialization
+                for i in xrange(hypInArray.shape[0]):   # random init of hyp
+                    hypInArray[i] = np.random.uniform(low=searchRange[i][0], high=searchRange[i][1])
+                if isinstance(covfunc, pyGPs.cov.SM):
+                    hyps = pyGPs.cov.initSMhypers(self.model.covfunc.para[0], x, y)
+                    hypInArray[Lm:Lm + Lc] = hyps[:]
+
+                # value this time is better than optimal min value
+                try:
+                    thisopt = cobyla(self._nlml, hypInArray, [], iprint=0, maxfun=100)
+                    temp = self._nlml(thisopt)
+                    if temp < funcValue:
+                        funcValue = temp
+                        optimalHyp = thisopt
+                except:
+                    self.errorCounter += 1
+                if self.searchConfig.num_restarts and self.errorCounter > self.searchConfig.num_restarts / 2:
+                    print "[COBYLA] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
+                    raise Exception("Over half of the trails failed for COBYLA")
+                # if exceed num_restarts
+                if self.searchConfig.num_restarts and self.trailsCounter > self.searchConfig.num_restarts - 1:
+                    print "[COBYLA] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
+                    return optimalHyp, funcValue
+                # reach provided mininal
+                if self.searchConfig.min_threshold and funcValue <= self.searchConfig.min_threshold:
+                    print "[COBYLA] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
+                    return optimalHyp, funcValue
+
+        return optimalHyp, funcValue
 
 
 class SCG(Optimizer):
@@ -279,7 +423,7 @@ class SCG(Optimizer):
             funcValue  = opt[1][-1]
         except:
             self.errorCounter += 1
-            if not self.searchConfig:         
+            if not self.searchConfig:
                 raise Exception("Can not use Scaled conjugate gradient. Try other hyparameters")
         self.trailsCounter += 1
 
@@ -307,7 +451,7 @@ class SCG(Optimizer):
                     return optimalHyp, funcValue
                 if self.searchConfig.min_threshold and funcValue <= self.searchConfig.min_threshold:           # reach provided mininal
                     print "[SCG] %d out of %d trails failed during optimization" % (self.errorCounter, self.trailsCounter)
-                    return optimalHyp, funcValue 
+                    return optimalHyp, funcValue
 
         return optimalHyp, funcValue
 
