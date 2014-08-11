@@ -64,7 +64,6 @@ class GP(object):
         self.nlZ       = None     # negative log marginal likelihood
         self.dnlZ      = None     # column vector of partial derivatives of the negative
         						  # log marginal likelihood w.r.t. each hyperparameter
-        self.dscale    = None     # ScalePrior something or other
         self.posterior = None     # struct representation of the (approximate) posterior
         self.x         = None     # n by D matrix of training inputs
         self.y         = None     # column vector of length n of training targets
@@ -75,8 +74,6 @@ class GP(object):
         self.fm        = None     # column vector (of length ns) of predictive latent means
         self.fs2       = None     # column vector (of length ns) of predictive latent variances
         self.lp        = None     # column vector (of length ns) of log predictive probabilities
-
-        self.ScalePrior = None	  # Output scale uncertainty (will be a Gamma prior parameter list of len 2)
 
     def setData(self, x, y):
         '''
@@ -91,10 +88,6 @@ class GP(object):
         if self.usingDefaultMean:
             c = np.mean(y)
             self.meanfunc = mean.Const(c)    # adapt default prior mean wrt. training labels
-
-    def setScalePrior(self, scalePrior):
-        assert(isinstance(scalePrior, list) and len(scalePrior) == 2)
-        self.ScalePrior = scalePrior
 
     def plotData_1d(self, axisvals=None):
         '''
@@ -150,7 +143,9 @@ class GP(object):
 
                         "COBYLA"     -> Constrained Optimization by Linear Approximation method of Powell
 
-                        "LBFGSB"       -> A Limited Memory Algorithm for Bound Constrained Optimization
+                        "LBFGSB"     -> A Limited Memory Algorithm for Bound Constrained Optimization
+
+                        "RTMinimize" -> Steaming minimize (from Ryan Turner's thesis)
 
         :param num_restarts: Set if you want to run mulitiple times of optimization with different initial guess.
                              It specifys the maximum number of runs/restarts/trials.
@@ -222,20 +217,16 @@ class GP(object):
             if any( uy[ind] != -1):
                 raise Exception('You attempt classification using labels different from {+1,-1}')
         if not der:
-            post, nlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, self.ScalePrior, 2)
+            post, nlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, 2)
             self.nlZ = nlZ
             self.posterior = deepcopy(post)
             return nlZ, post
         else:
-            if self.ScalePrior:
-                post, nlZ, dnlZ, dscale = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, self.ScalePrior, 3)
-            else:
-                post, nlZ, dnlZ = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, self.ScalePrior, 3)
-                dscale = None
+            #import pdb;
+            #pdb.set_trace()
+            [post, nlZ, dnlZ] = self.inffunc.evaluate(self.meanfunc, self.covfunc, self.likfunc, self.x, self.y, 3)
             self.nlZ       = nlZ
             self.dnlZ      = deepcopy(dnlZ)
-            self.dscale    = dscale
-            print 'dscale = ',dscale
             self.posterior = deepcopy(post)
             return nlZ, dnlZ, post
 
@@ -255,9 +246,9 @@ class GP(object):
         :return: ym, ys2, fm, fs2, lp
         '''
         meanfunc = self.meanfunc
-        covfunc = self.covfunc
-        likfunc = self.likfunc
-        inffunc = self.inffunc
+        covfunc  = self.covfunc
+        likfunc  = self.likfunc
+        inffunc  = self.inffunc
         x = self.x
         y = self.y
         if xs.ndim == 1:
@@ -307,6 +298,7 @@ class GP(object):
                 [Lp, Ymu, Ys2] = likfunc.evaluate(None,Fmu[:],Fs2[:],None,None,3)
             else:
                 [Lp, Ymu, Ys2] = likfunc.evaluate(np.tile(ys[id],(1,N)), Fmu[:], Fs2[:],None,None,3)
+
             lp[id]  = np.reshape( np.reshape(Lp,(np.prod(Lp.shape),N)).sum(axis=1)/N , (len(id),1) )   # log probability; sample averaging
             ymu[id] = np.reshape( np.reshape(Ymu,(np.prod(Ymu.shape),N)).sum(axis=1)/N ,(len(id),1) )  # predictive mean ys|y and ...
             ys2[id] = np.reshape( np.reshape(Ys2,(np.prod(Ys2.shape),N)).sum(axis=1)/N , (len(id),1) ) # .. variance
@@ -339,9 +331,9 @@ class GP(object):
         :return: ym, ys2, fm, fs2, lp
         '''
         meanfunc = self.meanfunc
-        covfunc = self.covfunc
-        likfunc = self.likfunc
-        inffunc = self.inffunc
+        covfunc  = self.covfunc
+        likfunc  = self.likfunc
+        inffunc  = self.inffunc
         x = self.x
         y = self.y
         if xs.ndim == 1:
@@ -398,6 +390,7 @@ class GP(object):
         self.lp = lp
         self.fm = fmu
         self.fs2 = fs2
+
         if ys == None:
             return ymu, ys2, fmu, fs2, None
         else:
@@ -444,8 +437,10 @@ class GPR(GP):
             self.optimizer = opt.LBFGSB(self, conf)
         elif method == "COBYLA":
             self.optimizer = opt.COBYLA(self, conf)
+        elif method == "RTMinimize":
+            self.optimizer = opt.RTMinimize(self, conf)
         else:
-            raise Error('Optimization method is not set correctly in setOptimizer')
+            raise error('Optimization method is not set correctly in setOptimizer')
 
     def plot(self,axisvals=None):
         '''Plot 1d GP regression.'''

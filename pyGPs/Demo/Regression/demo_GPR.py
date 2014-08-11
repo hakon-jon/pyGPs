@@ -54,17 +54,16 @@ model = pyGPs.GPR()           # start from a new model
 
 # Specify non-default mean and covariance functions
 # @SEE doc_kernel_mean for documentation of all kernels/means
-m = pyGPs.mean.Const() + pyGPs.mean.Linear()
-k = pyGPs.cov.Matern(d=7) # Approximates RBF kernel
+#m = pyGPs.mean.Const() + pyGPs.mean.Linear()
+m = pyGPs.mean.Zero()
+#k = pyGPs.cov.Matern(d=7) # Approximates RBF kernel
+k = pyGPs.cov.RBF() # Approximates RBF kernel
 model.setPrior(mean=m, kernel=k)
-model.setScalePrior([1.0, 1.0])
+
 # Specify optimization method (single run "Minimize" by default)
 # @SEE doc_optimization for documentation of optimization methods
 model.setOptimizer("COBYLA", num_restarts=30)
 #model.setOptimizer("CG", num_restarts=30)
-#model.setOptimizer("LBFGSB", num_restarts=30)
-
-print model.ScalePrior
 
 # Instead of fit(), which only fits data using given hyperparameters,
 # optimize() will optimize hyperparamters based on marginal likelihood
@@ -72,7 +71,6 @@ print model.ScalePrior
 # ..if you do not specify mean function by your own.
 model.optimize(x, y)
 #model.plotData_1d()
-print model.ScalePrior
 
 # There are several propertys you can get from the model
 # For example:
@@ -97,7 +95,6 @@ print 'Optimized negative log marginal likelihood:', round(model.nlZ,3)
 # Predict test data
 # output mean(ymu)/variance(ys2), latent mean(fmu)/variance(fs2), and log predictive probabilities(lp)
 ym, ys2, fmu, fs2, lp = model.predict(z)
-
 
 # Set range of axis for plotting
 # NOTE: plot() is a toy method only for 1-d data

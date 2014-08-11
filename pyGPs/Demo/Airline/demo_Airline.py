@@ -51,7 +51,7 @@ if __name__ == '__main__':
     # the deafult mean will be adapted to the average value of the training labels..
     # ..if you do not specify mean function by your own.
     model.optimize(x, y)
-    model.plotData_1d()
+    #model.plotData_1d()
 
     print 'Optimized negative log marginal likelihood:', round(model.nlZ, 3)
     # Predict test data
