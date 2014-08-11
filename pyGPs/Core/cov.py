@@ -441,9 +441,12 @@ class SM(Kernel):
     :param log_v: spectral variances.
     '''
 
-    def __init__(self, Q=0, hyps=[]):
-        self.hyp = hyps
-        self.para = [Q]
+    def __init__(self, Q=0, hyps=[], D=None):
+        if D:
+            self.hyp = np.random.random(Q*(1+2*D))
+        else:
+	        self.hyp = hyps
+    	self.para = [Q]
 
     def getCovMatrix(self,x=None,z=None,mode=None):
         Q = self.para[0]
