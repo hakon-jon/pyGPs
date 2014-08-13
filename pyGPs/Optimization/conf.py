@@ -15,12 +15,14 @@
 import numpy as np
 
 class random_init_conf(object):
-    def __init__(self, mean, cov, lik):
+    def __init__(self, mean, cov, lik, x, y):
         self.num_restarts = None
         self.min_threshold = None
         self.mean = mean
         self.cov = cov
         self.lik = lik
+        self.x = x
+        self.y = y
         self._meanRange = [(-5,5) for i in mean.hyp]
         self._covRange  = [(-5,5) for i in cov.hyp]
         self._likRange  = [(-5,5) for i in lik.hyp]

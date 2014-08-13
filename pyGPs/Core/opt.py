@@ -34,16 +34,16 @@ class Optimizer(object):
 
     def findMin(self, x, y):
         '''
-        Find minimal value based on negative-log-marginal-likelihood. 
+        Find minimal value based on negative-log-marginal-likelihood.
         optimalHyp, funcValue = findMin(x, y)
 
         where funcValue is the minimal negative-log-marginal-likelihood during optimization,
         and optimalHyp is a flattened numpy array 
-        (in sequence of meanfunc.hyp, covfunc.hyp, likfunc.hyp) 
+        (in sequence of meanfunc.hyp, covfunc.hyp, likfunc.hyp)
         of the hyparameters to achieve such value.
 
-        You can achieve advanced search strategy by initializing Optimizer with searchConfig, 
-        which is an instance of pyGPs.Optimization.conf. 
+        You can achieve advanced search strategy by initializing Optimizer with searchConfig,
+        which is an instance of pyGPs.Optimization.conf.
         See more in pyGPs.Optimization.conf and pyGPs.Core.gp.GP.setOptimizer,
         as well as in online documentation of section Optimizers.
         '''
@@ -100,6 +100,11 @@ class CG(Optimizer):
         likfunc = self.model.likfunc
         inffunc = self.model.inffunc
         hypInArray = self._convert_to_array()
+
+        if isinstance(covfunc, pyGPs.cov.SM):
+            Lm = len(meanfunc.hyp)
+            Lc = len(covfunc.hyp)
+
         try:
             opt = cg(self._nlml, hypInArray, self._dnlml, maxiter=100, disp=False, full_output=True)
             optimalHyp = deepcopy(opt[0])
@@ -159,6 +164,10 @@ class BFGS(Optimizer):
         likfunc = self.model.likfunc
         inffunc = self.model.inffunc
         hypInArray = self._convert_to_array()
+
+        if isinstance(covfunc, pyGPs.cov.SM):
+            Lm = len(meanfunc.hyp)
+            Lc = len(covfunc.hyp)
 
         try:
             opt = bfgs(self._nlml, hypInArray, self._dnlml, maxiter=100, disp=False, full_output=True)
@@ -295,9 +304,13 @@ class Minimize(Optimizer):
         inffunc = self.model.inffunc
         hypInArray = self._convert_to_array()
 
-        opt = minimize.run(self._nlzAnddnlz, hypInArray, length=-40)
+        if isinstance(covfunc, pyGPs.cov.SM):
+            Lm = len(meanfunc.hyp)
+            Lc = len(covfunc.hyp)
+            print Lm, Lc, len(hypInArray)
+
         try:
-            opt = minimize.run(self._nlzAnddnlz, hypInArray, length=-40)
+            opt = minimize.run(self._nlzAnddnlz, hypInArray, length=-100)
             optimalHyp = deepcopy(opt[0])
             funcValue  = opt[1][-1]
         except:
@@ -314,10 +327,14 @@ class Minimize(Optimizer):
                 self.trailsCounter += 1                 # increase counter
                 for i in xrange(hypInArray.shape[0]):   # random init of hyp
                     hypInArray[i]= np.random.uniform(low=searchRange[i][0], high=searchRange[i][1])
-                # value this time is better than optiaml min value
+                if isinstance(covfunc, pyGPs.cov.SM):
+                    hyps = pyGPs.cov.initSMhypers(covfunc.para[0], self.searchConfig.x, self.searchConfig.y)
+                    # Replace covariance hyperparameters with hyps
+                    hypInArray[Lm:Lm+Lc] = hyps
+                    hypInArray[-1] = 0.
                 try:
-                    thisopt = minimize.run(self._nlzAnddnlz, hypInArray, length=-40)
-                    if thisopt[1][-1] < funcValue:
+                    thisopt = minimize.run(self._nlzAnddnlz, hypInArray, length=-100)
+                    if thisopt[1][-1] < funcValue:  # value this time is better than optiaml min value
                         funcValue  = thisopt[1][-1]
                         optimalHyp = thisopt[0]
                 except:
@@ -417,6 +434,11 @@ class SCG(Optimizer):
         likfunc = self.model.likfunc
         inffunc = self.model.inffunc
         hypInArray = self._convert_to_array()
+
+        if isinstance(covfunc, pyGPs.cov.SM):
+            Lm = len(meanfunc.hyp)
+            Lc = len(covfunc.hyp)
+
         try:
             opt = scg.run(self._nlzAnddnlz, hypInArray)
             optimalHyp = deepcopy(opt[0])

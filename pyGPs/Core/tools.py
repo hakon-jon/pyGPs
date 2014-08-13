@@ -100,7 +100,6 @@ def brentmin(xlow,xupp,Nitmax,tol,f,nout=None,*args):
     #
     # This is a python implementation of gpml functionality (Copyright (c) by
     # Hannes Nickisch 2010-01-10).
-    
 
     if nout == None:
         nout = 0

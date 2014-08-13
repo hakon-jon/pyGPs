@@ -29,8 +29,8 @@ if __name__ == '__main__':
     #yt = np.concatenate((y,yt))
 
     # Set some parameters
-    Q = 10
-    nItr = 10
+    Q = 4
+    nInt = 10
 
     model = pyGPs.GPR()           # start from a new model
 
@@ -45,7 +45,7 @@ if __name__ == '__main__':
     # Noise std. deviation
     sn = 0.1
     model.setNoise(log_sigma=np.log(sn))
-
+    model.setOptimizer("Minimize", num_restarts=nInt, x=x, y=y)
     # Instead of fit(), which only fits data using given hyperparameters,
     # optimize() will optimize hyperparamters based on marginal likelihood
     # the deafult mean will be adapted to the average value of the training labels..

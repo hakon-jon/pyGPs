@@ -52,6 +52,64 @@ import numpy as np
 import math
 import scipy.spatial.distance as spdist
 
+def initCovParams(hyperunits, x, y):
+    """
+        Initialize hyperparameters of the covariance function. Set hyperunits to the units of the hypers.
+        eg. hyperUnits = [0 1 2 1] =>
+        hyper[0] has the units of y
+        hyper[1] and [3] have units of x[:,0]
+        and hyper[2] have units of x[:,1]
+        etc.
+        
+        """
+    
+    hypinit = np.empty(len(hyperunits))
+    
+    outputMaxvRange = 1.
+    outputMinvRange = 150.
+    inputMaxvRange = 1.
+    inputMinvDelta = 0.333
+    minVarPossible = 1.
+    
+    numHypers = len(hyperunits)
+    (N, D) = x.shape
+    
+    # get 95% range of inputs
+    
+    inputRange = np.diff(np.percentile(x, [.25, 97.5]))
+    
+    # get typical between distance amounts
+    
+    inputDelta = np.atleast_1d(np.median(np.diff(np.sort(x), axis=0)))
+    
+    # get 95% range of outputs: 1 sd = range / 4
+    
+    outputRange = np.diff(np.percentile(y, [.25, 97.5]))
+    
+    hyperMax = np.zeros(numHypers)
+    hyperMin = np.zeros(numHypers)
+    
+    hyperMax[hyperunits == 0] = np.log(outputRange / outputMaxvRange)
+    hyperMin[hyperunits == 0] = np.log(outputRange / outputMinvRange)
+    
+    for ii in range(D):
+        hyperMax[hyperunits == ii] = np.log(inputRange[ii] / inputMaxvRange)
+        hyperMin[hyperunits == ii] = np.log(inputDelta[ii] / inputMinvDelta)
+    
+    # Take the midpoint as the mean
+    hyperMean = 0.5 * (hyperMax + hyperMin)
+    
+    # Take range = 95% of the normal => std = range / 4 => then ^2 for variance
+    hyperpar = (.25 * (hyperMax - hyperMin)) ** 2
+    
+    # take max op with floor
+    hyperVar = np.clip(hyperVar, -np.inf, minVarPossible)
+    
+    # Sample from this distribution
+    hypinit = np.exp(np.random.multivariate_normal(hyperMean,np.diag(hyperVar)))
+                                                   
+    return hypinit
+
 def initSMhypers(Q, x, y):
     """
         Initialize hyperparameters for the spectral-mixture kernel. Weights are

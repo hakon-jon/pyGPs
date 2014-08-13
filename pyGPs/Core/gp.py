@@ -128,7 +128,7 @@ class GP(object):
             if type(kernel) is cov.Pre:
                 self.usingDefaultMean = False
 
-    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None):
+    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None, x=None, y=None):
         '''This method is used to sepecify optimization configuration. By default, gp uses a single run "minimize".
 
         :param method: Optimization methods. Possible values are:
@@ -159,6 +159,8 @@ class GP(object):
                           (-5,5) for each hyperparameter by default.
         :param covRange: The range of initial guess for kernel hyperparameters. Usage see meanRange
         :param likRange: The range of initial guess for likelihood hyperparameters. Usage see meanRange
+        :param x: The independent variables of training data
+        :param y: The dependent variable(s) of the training data
 
         '''
         pass
@@ -412,13 +414,15 @@ class GPR(GP):
         '''Set noise variance other than default'''
         self.likfunc = lik.Gauss(log_sigma)
 
-    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None):
+    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None, x=None, y=None):
         '''Set Optimizer. See base class.'''
         conf = None
         if (num_restarts!=None) or (min_threshold!=None):
-            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc)
+            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc,self.x,self.y)
             conf.num_restarts = num_restarts
             conf.min_threshold = min_threshold
+            conf.x = x
+            conf.y = y
             if meanRange != None:
                 conf.meanRange = meanRange
             if covRange != None:
@@ -496,11 +500,11 @@ class GPC(GP):
         self.inffunc = inf.EP()                            # default inference method
         self.optimizer = opt.Minimize(self)                # default optimizer
 
-    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None):
+    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None, x=None, y=None):
         '''Set Optimizer. See base class.'''
         conf = None
         if (num_restarts!=None) or (min_threshold!=None):
-            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc)
+            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc,self.x,self.y)
             conf.num_restarts = num_restarts
             conf.min_threshold = min_threshold
             if meanRange != None:
@@ -763,11 +767,11 @@ class GPR_FITC(GP_FITC):
         '''Set noise variance other than default value'''
         self.likfunc = lik.Gauss(log_sigma)
 
-    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None):
+    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None, x=None, y=None):
         '''Set Optimizer. See base class.'''
         conf = None
         if (num_restarts!=None) or (min_threshold!=None):
-            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc)
+            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc,self.x,self.y)
             conf.num_restarts = num_restarts
             conf.min_threshold = min_threshold
             if meanRange != None:
@@ -845,11 +849,11 @@ class GPC_FITC(GP_FITC):
         self.optimizer = opt.Minimize(self)                # default optimizer
         self.u = None                                      # no default inducing points
 
-    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None):
+    def setOptimizer(self, method, num_restarts=None, min_threshold=None, meanRange=None, covRange=None, likRange=None, x=None, y=None):
         '''Set optimizer. See base class.'''
         conf = None
         if (num_restarts!=None) or (min_threshold!=None):
-            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc)
+            conf = pyGPs.Optimization.conf.random_init_conf(self.meanfunc,self.covfunc,self.likfunc,self.x,self.y)
             conf.num_restarts = num_restarts
             conf.min_threshold = min_threshold
             if meanRange != None:
